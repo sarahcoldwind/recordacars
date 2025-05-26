@@ -1,23 +1,41 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"os"
+	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"recordacars/db"
 )
 
 func main() {
-	if err := run(os.Stdin); err != nil {
+	if err := run(context.Background(), os.Stdin); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func run(r io.Reader) error {
-	log.Println("starting recorder")
+func run(ctx context.Context, r io.Reader) error {
+	log.Println("setting up database")
+	pool, err := pgxpool.New(ctx, os.Getenv("DATABASE_URL"))
+	if err != nil {
+		return fmt.Errorf("could not set up database pool: %w", err)
+	}
+	defer pool.Close()
+
+	queries := db.New(pool)
+
 	dec := json.NewDecoder(r)
-	var msg Message
+	var (
+		msg    Message
+		params db.InsertACARSMessageParams
+	)
 	for {
 		err := dec.Decode(&msg)
 		if err == io.EOF {
@@ -26,39 +44,93 @@ func run(r io.Reader) error {
 		} else if err != nil {
 			return err
 		}
-		fmt.Printf("%#v\n", msg)
+		log.Println("decoded ACARS message")
+		populateParams(&params, &msg)
+		if err := queries.InsertACARSMessage(ctx, params); err != nil {
+			return err
+		}
 	}
 }
 
 type Message struct {
 	Timestamp float64 `json:"timestamp"`
-	StationID string  `json:"station_id"`
-	Channel   int64   `json:"channel"`
-	Frequency float64 `json:"freq"`
+	StationID *string `json:"station_id"`
+	Channel   int32   `json:"channel"`
+	Freq      float64 `json:"freq"`
 	Level     float64 `json:"level"`
-	Error     int64   `json:"error"`
+	Error     int32   `json:"error"`
 	Mode      string  `json:"mode"`
 	Label     string  `json:"label"`
-	BlockID   string  `json:"block_id"`
+	BlockID   *string `json:"block_id"`
 	//Ack string|false
-	Tail     string          `json:"tail"`
-	Flight   string          `json:"flight"`
-	MsgNo    string          `json:"msgno"`
-	Text     string          `json:"text"`
+	Tail     *string         `json:"tail"`
+	Flight   *string         `json:"flight"`
+	Msgno    *string         `json:"msgno"`
+	Text     *string         `json:"text"`
 	End      bool            `json:"end"`
-	DepA     string          `json:"depa"`
-	DstA     string          `json:"dsta"`
-	ETA      string          `json:"eta"`
-	GtOut    string          `json:"gtout"`
-	GtIn     string          `json:"gtin"`
-	WlOff    string          `json:"wloff"`
-	Won      string          `json:"wlin"` // n.b. this appears to be mislabeled in the source: https://github.com/TLeconte/acarsdec/blob/7920079b8e005c6c798bd478a513211daf9bbd25/output.c#L293-L294
-	Sublabel string          `json:"sublabel"`
-	MFI      string          `json:"mfi"`
-	AssStat  string          `json:"assstat"`
+	Depa     *string         `json:"depa"`
+	Dsta     *string         `json:"dsta"`
+	ETA      *string         `json:"eta"`
+	Gtout    *string         `json:"gtout"`
+	Gtin     *string         `json:"gtin"`
+	Wloff    *string         `json:"wloff"`
+	Won      *string         `json:"wlin"` // n.b. this appears to be mislabeled in the source: https://github.com/TLeconte/acarsdec/blob/7920079b8e005c6c798bd478a513211daf9bbd25/output.c#L293-L294
+	Sublabel *string         `json:"sublabel"`
+	MFI      *string         `json:"mfi"`
+	Assstat  *string         `json:"assstat"`
 	Libacars json.RawMessage `json:"libacars"`
 	App      struct {
 		Name string `json:"name"`
 		Ver  string `json:"ver"`
 	} `json:"app"`
+}
+
+// populateParams populates the given db.InsertACARSMessageParams struct using
+// the values from msg.
+func populateParams(params *db.InsertACARSMessageParams, msg *Message) {
+	params.Timestamp = pgtype.Timestamptz{
+		Time:             time.UnixMicro(int64(msg.Timestamp * 10e6)).UTC(),
+		InfinityModifier: pgtype.Finite,
+		Valid:            true,
+	}
+	params.StationID = pgText(msg.StationID)
+	params.Channel = msg.Channel
+	params.Freq = msg.Freq
+	params.Level = msg.Level
+	params.Error = msg.Error
+	params.Mode = msg.Mode
+	params.Label = msg.Label
+	params.BlockID = pgText(msg.BlockID)
+	params.Tail = pgText(msg.Tail)
+	params.Flight = pgText(msg.Flight)
+	params.Msgno = pgText(msg.Msgno)
+	params.Text = pgText(msg.Text)
+	params.End = msg.End
+	params.Depa = pgText(msg.Depa)
+	params.Dsta = pgText(msg.Dsta)
+	params.Eta = pgText(msg.ETA)
+	params.Gtout = pgText(msg.Gtout)
+	params.Gtin = pgText(msg.Gtin)
+	params.Wloff = pgText(msg.Wloff)
+	params.Won = pgText(msg.Won)
+	params.Sublabel = pgText(msg.Sublabel)
+	params.Mfi = pgText(msg.MFI)
+	params.Assstat = pgText(msg.Assstat)
+	params.Libacars = msg.Libacars
+	params.AppName = msg.App.Name
+	params.AppVer = msg.App.Ver
+}
+
+func pgText(s *string) pgtype.Text {
+	if s == nil {
+		return pgtype.Text{}
+	}
+	return pgtype.Text{String: *s, Valid: true}
+}
+
+func pgFloat8(f *float64) pgtype.Float8 {
+	if f == nil {
+		return pgtype.Float8{}
+	}
+	return pgtype.Float8{Float64: *f, Valid: true}
 }
