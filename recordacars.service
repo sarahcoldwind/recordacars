@@ -1,0 +1,11 @@
+[Unit]
+Description=Record ACARS messages
+After=network.target
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=10
+ExecStart=recordacars
+StandardInput=file:/run/acars_messages
+EnvironmentFile=/usr/local/etc/recordacars/environment
