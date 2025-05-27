@@ -89,7 +89,7 @@ type Message struct {
 // the values from msg.
 func populateParams(params *db.InsertACARSMessageParams, msg *Message) {
 	params.Timestamp = pgtype.Timestamptz{
-		Time:             time.UnixMicro(int64(msg.Timestamp * 10e6)).UTC(),
+		Time:             time.UnixMicro(int64(msg.Timestamp * 1e6)).UTC(),
 		InfinityModifier: pgtype.Finite,
 		Valid:            true,
 	}
